@@ -3,11 +3,12 @@ import shutil
 import zipfile
 import uuid
 import logging
-from fastapi import FastAPI, Request, BackgroundTasks
+from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.background import BackgroundTask
 
-# Logging einrichten für bessere Fehlerdiagnose in Railway
+# Logging einrichten
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,13 @@ if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
 
 def cleanup(path: str):
+    """Löscht das Build-Verzeichnis nach dem Download."""
     if os.path.exists(path):
         shutil.rmtree(path)
-        logger.info(f"Cleaned up: {path}")
+        logger.info(f"Cleaned up build directory: {path}")
 
 @app.post("/generate-ipa")
-async def generate_ipa(request: Request, background_tasks: BackgroundTasks):
+async def generate_ipa(request: Request):
     build_id = str(uuid.uuid4())
     build_path = os.path.join(TEMP_DIR, build_id)
     extract_path = os.path.join(build_path, "extracted")
@@ -55,8 +57,8 @@ async def generate_ipa(request: Request, background_tasks: BackgroundTasks):
             zip_ref.extractall(extract_path)
         logger.info(f"Extracted template to {extract_path}")
 
-        # 2. Überschreibe die Dateien
-        # Struktur laut Analyse: Payload/Application.app/web/html/index.html
+        # 2. Überschreibe die Dateien in der korrekten Struktur
+        # Struktur: Payload/Application.app/web/html/index.html etc.
         for file_path, content in files.items():
             filename = os.path.basename(file_path)
             if filename.endswith('.html'):
@@ -77,29 +79,26 @@ async def generate_ipa(request: Request, background_tasks: BackgroundTasks):
         # 3. Erstelle die neue IPA (ZIP)
         final_ipa_path = os.path.join(build_path, f"{project_name}.ipa")
         
-        # Wir nutzen zipfile direkt und stellen sicher, dass wir im richtigen Verzeichnis sind
         with zipfile.ZipFile(final_ipa_path, 'w', zipfile.ZIP_DEFLATED) as new_zip:
-            # Wir gehen durch das extrahierte Verzeichnis
             for root, dirs, filenames in os.walk(extract_path):
                 for filename in filenames:
                     abs_path = os.path.join(root, filename)
-                    # rel_path sorgt dafür, dass 'Payload' auf der obersten Ebene ist
                     rel_path = os.path.relpath(abs_path, extract_path)
                     new_zip.write(abs_path, rel_path)
-                    logger.info(f"Added to ZIP: {rel_path}")
 
-        # Überprüfe, ob die Datei erstellt wurde und nicht leer ist
+        # Validierung
         if not os.path.exists(final_ipa_path) or os.path.getsize(final_ipa_path) == 0:
             logger.error("Generated IPA is missing or empty!")
             return {"error": "Failed to generate valid IPA"}
 
         logger.info(f"Successfully generated IPA: {final_ipa_path} ({os.path.getsize(final_ipa_path)} bytes)")
-        background_tasks.add_task(cleanup, build_path)
 
+        # FIX: Verwende BackgroundTask direkt in FileResponse, damit die Datei erst NACH dem Streamen gelöscht wird.
         return FileResponse(
             final_ipa_path,
             media_type="application/octet-stream",
-            filename=f"{project_name}.ipa"
+            filename=f"{project_name}.ipa",
+            background=BackgroundTask(cleanup, build_path)
         )
 
     except Exception as e:
@@ -110,7 +109,7 @@ async def generate_ipa(request: Request, background_tasks: BackgroundTasks):
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "IPA Generator Backend is running (ZIP Fix Applied)"}
+    return {"status": "ok", "message": "IPA Generator Backend is running (Streaming Fix Applied)"}
 
 if __name__ == "__main__":
     import uvicorn
