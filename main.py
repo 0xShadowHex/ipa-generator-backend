@@ -8,8 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
 
-# CORS erlauben, damit das Frontend darauf zugreifen kann
-# Wir erlauben alle Origins, Methoden und Header, um NetworkErrors zu vermeiden
+# CORS erlauben
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -42,23 +41,27 @@ async def generate_ipa(request: Request, background_tasks: BackgroundTasks):
         build_path = os.path.join(TEMP_DIR, build_id)
         os.makedirs(build_path)
         
-        # Kopiere Vorlage
-        target_ipa = os.path.join(build_path, f"{project_name}.ipa")
-        shutil.copy(TEMPLATE_IPA, target_ipa)
+        # 1. Erstelle eine Kopie der Vorlage als .zip
+        temp_zip = os.path.join(build_path, "temp.zip")
+        shutil.copy(TEMPLATE_IPA, temp_zip)
         
-        # Dateien in IPA aktualisieren
-        with zipfile.ZipFile(target_ipa, 'a') as zip_ref:
-            # files ist ein Objekt mit { "html/index.html": "content", ... }
+        # 2. Dateien in das ZIP einfügen
+        # Wir öffnen das ZIP im 'append' Modus
+        with zipfile.ZipFile(temp_zip, 'a') as zip_ref:
             for file_path, content in files.items():
-                # In der IPA liegen die Web-Dateien unter Payload/Application.app/web/
-                # Wir müssen den Pfad entsprechend anpassen
-                internal_path = f"Payload/Application.app/web/{file_path}"
+                # Der Pfad innerhalb der IPA (Payload/Application.app/www/ oder /web/)
+                # Basierend auf Standard-Cordova/Capacitor Strukturen
+                internal_path = f"Payload/Application.app/www/{file_path}"
                 zip_ref.writestr(internal_path, content)
-                
+        
+        # 3. Benenne das ZIP in .ipa um
+        final_ipa = os.path.join(build_path, f"{project_name}.ipa")
+        os.rename(temp_zip, final_ipa)
+        
         background_tasks.add_task(cleanup, build_path)
         
         return FileResponse(
-            target_ipa, 
+            final_ipa, 
             media_type="application/octet-stream",
             filename=f"{project_name}.ipa"
         )
@@ -67,7 +70,7 @@ async def generate_ipa(request: Request, background_tasks: BackgroundTasks):
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "IPA Generator Backend is running with CORS enabled"}
+    return {"status": "ok", "message": "IPA Generator Backend is running (Fixed ZIP Handling)"}
 
 if __name__ == "__main__":
     import uvicorn
