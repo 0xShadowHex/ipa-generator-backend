@@ -18,7 +18,8 @@ app.add_middleware(
 )
 
 TEMP_DIR = "/tmp/ipa_builds"
-TEMPLATE_IPA = "template/template.ipa"
+# Wir verwenden nun die Application.zip als Vorlage
+TEMPLATE_ZIP = "template/template.zip"
 
 if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
@@ -39,24 +40,39 @@ async def generate_ipa(request: Request, background_tasks: BackgroundTasks):
         extract_path = os.path.join(build_path, "extracted")
         os.makedirs(extract_path)
 
-        # 1. Entpacke die IPA-Vorlage in ein temporäres Verzeichnis
-        with zipfile.ZipFile(TEMPLATE_IPA, 'r') as zip_ref:
+        # 1. Entpacke die Vorlage
+        with zipfile.ZipFile(TEMPLATE_ZIP, 'r') as zip_ref:
             zip_ref.extractall(extract_path)
 
-        # 2. Überschreibe die Dateien mit dem neuen Inhalt
+        # 2. Überschreibe die Dateien basierend auf der analysierten Struktur
+        # Die Struktur ist: Payload/Application.app/web/html/index.html, etc.
         for file_path, content in files.items():
-            # Der Pfad innerhalb der IPA lautet Payload/Application.app/www/
-            target_file = os.path.join(extract_path, "Payload/Application.app/www", file_path)
+            # Wir ordnen die Dateien den entsprechenden Unterordnern zu
+            if file_path.endswith('.html'):
+                target_subpath = "Payload/Application.app/web/html"
+            elif file_path.endswith('.css'):
+                target_subpath = "Payload/Application.app/web/css"
+            elif file_path.endswith('.js'):
+                target_subpath = "Payload/Application.app/web/js"
+            else:
+                target_subpath = "Payload/Application.app/web"
+
+            target_file = os.path.join(extract_path, target_subpath, os.path.basename(file_path))
             os.makedirs(os.path.dirname(target_file), exist_ok=True)
-            with open(target_file, "w") as f:
+            with open(target_file, "w", encoding="utf-8") as f:
                 f.write(content)
 
-        # 3. Erstelle eine neue IPA-Datei aus dem modifizierten Inhalt
+        # 3. Erstelle die neue IPA (ZIP)
+        # WICHTIG: Wir müssen im extrahierten Verzeichnis zippen, damit 'Payload' auf der obersten Ebene liegt
         final_ipa_path = os.path.join(build_path, f"{project_name}.ipa")
-        shutil.make_archive(base_name=final_ipa_path.replace('.ipa', ''), format='zip', root_dir=extract_path)
         
-        # shutil.make_archive hängt .zip an, also benennen wir es um
-        os.rename(f"{final_ipa_path.replace('.ipa', '')}.zip", final_ipa_path)
+        # Wir nutzen zipfile direkt, um volle Kontrolle über die Struktur zu haben
+        with zipfile.ZipFile(final_ipa_path, 'w', zipfile.ZIP_DEFLATED) as new_zip:
+            for root, dirs, filenames in os.walk(extract_path):
+                for filename in filenames:
+                    abs_path = os.path.join(root, filename)
+                    rel_path = os.path.relpath(abs_path, extract_path)
+                    new_zip.write(abs_path, rel_path)
 
         background_tasks.add_task(cleanup, build_path)
 
@@ -67,14 +83,13 @@ async def generate_ipa(request: Request, background_tasks: BackgroundTasks):
         )
 
     except Exception as e:
-        # Im Fehlerfall aufräumen
         if 'build_path' in locals() and os.path.exists(build_path):
             cleanup(build_path)
         return {"error": str(e)}
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "IPA Generator Backend is running (Robust ZIP Handling)"}
+    return {"status": "ok", "message": "IPA Generator Backend is running (Final Path Fix)"}
 
 if __name__ == "__main__":
     import uvicorn
