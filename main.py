@@ -23,7 +23,7 @@ app.add_middleware(
 )
 
 TEMP_DIR = "/tmp/ipa_builds"
-TEMPLATE_ZIP = "template/template.zip"
+TEMPLATE_ZIP = "template.zip"
 
 if not os.path.exists(TEMP_DIR):
     os.makedirs(TEMP_DIR)
@@ -48,9 +48,9 @@ async def generate_ipa(request: Request):
 
         os.makedirs(extract_path, exist_ok=True)
 
-        # 1. Entpacke die Vorlage
+        # 1. Entpacke die Vorlage (template.zip)
         if not os.path.exists(TEMPLATE_ZIP):
-            logger.error("Template ZIP not found!")
+            logger.error(f"Template ZIP not found at {TEMPLATE_ZIP}!")
             return {"error": "Template not found on server"}
 
         with zipfile.ZipFile(TEMPLATE_ZIP, 'r') as zip_ref:
@@ -76,10 +76,10 @@ async def generate_ipa(request: Request):
                 f.write(content)
             logger.info(f"Updated file: {target_file}")
 
-        # 3. Erstelle die neue IPA (ZIP)
-        final_ipa_path = os.path.join(build_path, f"{project_name}.ipa")
+        # 3. Erstelle die neue ZIP
+        final_zip_path = os.path.join(build_path, f"{project_name}.zip")
         
-        with zipfile.ZipFile(final_ipa_path, 'w', zipfile.ZIP_DEFLATED) as new_zip:
+        with zipfile.ZipFile(final_zip_path, 'w', zipfile.ZIP_DEFLATED) as new_zip:
             for root, dirs, filenames in os.walk(extract_path):
                 for filename in filenames:
                     abs_path = os.path.join(root, filename)
@@ -87,29 +87,29 @@ async def generate_ipa(request: Request):
                     new_zip.write(abs_path, rel_path)
 
         # Validierung
-        if not os.path.exists(final_ipa_path) or os.path.getsize(final_ipa_path) == 0:
-            logger.error("Generated IPA is missing or empty!")
-            return {"error": "Failed to generate valid IPA"}
+        if not os.path.exists(final_zip_path) or os.path.getsize(final_zip_path) == 0:
+            logger.error("Generated ZIP is missing or empty!")
+            return {"error": "Failed to generate valid ZIP"}
 
-        logger.info(f"Successfully generated IPA: {final_ipa_path} ({os.path.getsize(final_ipa_path)} bytes)")
+        logger.info(f"Successfully generated ZIP: {final_zip_path} ({os.path.getsize(final_zip_path)} bytes)")
 
-        # FIX: Verwende BackgroundTask direkt in FileResponse, damit die Datei erst NACH dem Streamen gelöscht wird.
+        # Rückgabe als ZIP
         return FileResponse(
-            final_ipa_path,
-            media_type="application/octet-stream",
-            filename=f"{project_name}.ipa",
+            final_zip_path,
+            media_type="application/zip",
+            filename=f"{project_name}.zip",
             background=BackgroundTask(cleanup, build_path)
         )
 
     except Exception as e:
-        logger.error(f"Error during IPA generation: {str(e)}")
+        logger.error(f"Error during ZIP generation: {str(e)}")
         if os.path.exists(build_path):
             cleanup(build_path)
         return {"error": str(e)}
 
 @app.get("/")
 async def root():
-    return {"status": "ok", "message": "IPA Generator Backend is running (Streaming Fix Applied)"}
+    return {"status": "ok", "message": "ZIP Generator Backend is running (New Structure Applied)"}
 
 if __name__ == "__main__":
     import uvicorn
